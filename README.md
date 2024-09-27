@@ -2,6 +2,9 @@
 
 This script is designed to manage YAML entries for Vault policies, groups, and approles, including the ability to create and update these entries dynamically. The script also handles HCL file generation using Jinja2 templates and validates policies in Consul.
 
+## Important Note
+**Important:** vault-policy-script and vault-policy-eq should be in same folder please look at [File Structure and Paths](#file-structure-and-paths).
+
 ## Table of Contents
 - [Command-Line Usage](#command-line-usage)
 - [Available Parameters](#available-parameters)
