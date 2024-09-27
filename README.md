@@ -51,16 +51,18 @@ The script is located in the `/GIT/vault-policy-script` directory, and the requi
 ### Directory Structure:
 
 ```
-/GIT/
+/user_dir/
   ├── vault-policy-script/
   │    └── vault_policy_script.py   # Script Location
+  │    └── hcl_templet_admin.jinja  # jija for admin
+  │    └── hcl_templet_ro.jinja     # jija for rp
   └── vault-policy-eq/
        ├── consul/
        │    └── consul.yml          # Consul policy file
        ├── policies/                # Directory containing policy HCL files
        ├── groups/
        │    └── groups.yml          # YAML file for group management
-       └── aproles/
+       └── approles/
             └── products.yml        # YAML file for approle management
 ```
 
