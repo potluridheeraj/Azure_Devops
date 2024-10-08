@@ -5,6 +5,13 @@ import sys
 from collections import OrderedDict
 from jinja2 import Environment, FileSystemLoader
 
+
+consul_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\consul\\consul.yml'
+base_policy_dir = 'C:\\Users\\dheeraj\\Documents\\GIT\\policies'
+groups_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\groups\\groups.yml'
+approles_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\aproles\\products.yml'
+user_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\user\\user.yml'
+
 # Custom YAML dumper to maintain order
 class OrderedDumper(ruamel.yaml.Dumper):
     def increase_indent(self, flow=False, indentless=False):
@@ -50,8 +57,17 @@ def parse_args():
 
     return arg_dict
 
+# Function to sort the policies alphabetically
+def sort_policies(yaml_data, entry_key):
+    if entry_key in yaml_data:
+        entry = yaml_data[entry_key]
+        if 'policies' in entry:
+            entry['policies'] = sorted(entry['policies'])
+    else:
+        print(f"'{entry_key}' not found for sorting.")
+
 # Function to check and update consul.yml if a policy is missing
-def validate_and_update_consul_policy(policy, consul_file_path):
+def validate_and_update_consul_policy(policy):
     if not os.path.exists(consul_file_path):
         print(f"Consul file '{consul_file_path}' not found.")
         return False
@@ -131,13 +147,12 @@ def create_hcl_file(file_path, policy):
         print(f"Created {file_path} with {policy_type} capabilities for {app_name}.")
 
 # Function to check and create necessary policy files
-def create_or_validate_hcl_files(policy, base_policy_dir):
+def create_or_validate_hcl_files(policy):
     policy_parts = policy.split('/')
 
     if len(policy_parts) < 4:
         print(f"Invalid policy format: {policy}")
         return
-
     app_type = policy_parts[1]  # e.g., 'product' or 'data'
     app_name = policy_parts[2]  # e.g., 'dart'
     policy_type = policy_parts[-1]  # e.g., 'ro' or 'admin'
@@ -159,43 +174,52 @@ def create_or_validate_hcl_files(policy, base_policy_dir):
         print(f"{file_path} already exists.")
 
 # Function to handle approle entries
-def handle_approle(yaml_data, entry_key, policies, consul_file_path, base_policy_dir):
+def handle_approle(yaml_data, entry_key, policies):
     if entry_key not in yaml_data:
         print(f"'{entry_key}' not found. Creating '{entry_key}'.")
         for policy in policies:
             if policy.startswith('consul_tf_'):
-                validate_and_update_consul_policy(policy, consul_file_path)
+                validate_and_update_consul_policy(policy)
             if policy.endswith(('ro', 'admin')):
-                create_or_validate_hcl_files(policy, base_policy_dir)
+                create_or_validate_hcl_files(policy)
         yaml_data[entry_key] = {
             'role_id': entry_key,
             'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
         }
     else:
-        print(f"'{entry_key}' already exists. Use update function to add new policies")
+        print(f"'{entry_key}' already exists as {yaml_data[entry_key]} . Use update function to add new policies")
         sys.exit(1)
 
 # Function to handle group entries
-def handle_group(yaml_data, entry_key, ipa_key, policies, consul_file_path, base_policy_dir):
+def handle_group(yaml_data, entry_key, ipa_key, policies=None, users=None):
     if entry_key not in yaml_data:
-        print(f"'{entry_key}' not found. Creating '{entry_key}'.")
-        yaml_data[entry_key] = {
-            'aliases': {
-                'ipa': ipa_key
-            },
-            'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
-        }
+        print(f"Creating '{entry_key}'.")
+        if users:
+            users_list = [users]
+            yaml_data[entry_key] = {
+                'users': users,
+                'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
+            }
+        if ipa_key:
+            print("In else")
+            yaml_data[entry_key] = {
+                'aliases': {
+                    'ipa': ipa_key
+                },
+                'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
+            }
+        
         for policy in policies:
             if policy.startswith('consul_tf_'):
-                validate_and_update_consul_policy(policy, consul_file_path)
+                validate_and_update_consul_policy(policy)
             if policy.endswith(('ro', 'admin')):
-                create_or_validate_hcl_files(policy, base_policy_dir)
+                create_or_validate_hcl_files(policy)
     else:
-        print(f"'{entry_key}' already exists. Use update function to add new policies")
+        print(f"'{entry_key}' already exists as {yaml_data[entry_key]}. Use update function to add new policies")
         sys.exit(1)
 
 # Check if the specified entry exists and create it if necessary
-def create_entry(yaml_data, entry_key, ipa_key=None, policies=None, consul_file_path=None, base_policy_dir=None, is_group=False):
+def create_entry(yaml_data, entry_key, ipa_key=None, users=None, policies=None, is_group=False):
     # If it's a group, check if the ipa_key is already in use
     if is_group and ipa_key:
         # Search for the ipa_key in the existing data
@@ -206,25 +230,34 @@ def create_entry(yaml_data, entry_key, ipa_key=None, policies=None, consul_file_
 
         # If no existing ipa_key is found, proceed to create the group entry
         print(f"Planning to create group entry for '{entry_key}'.")
-        handle_group(yaml_data, entry_key, ipa_key, policies, consul_file_path, base_policy_dir)
-
-        # Print the details of the newly created group
+        handle_group(yaml_data, entry_key, ipa_key, policies)
+    
+    elif is_group and users:
+        # Search for the ipa_key in the existing data
+        for key, value in yaml_data.items():
+            if value.get('users') == users:
+                print(f"users '{users}' is already assigned to entry '{key}'. Update '{key}' with new policies")
+                return
+        # Validate and update user in user.yml
+        if validate_and_update_user(users, user_file_path):
+            print(f"Checking if user='{users}' exists in users.yml.")
+        # If no existing user is found, proceed to create the group entry
+        print(f"Planning to create user entry for '{entry_key}'.")
+        handle_group(yaml_data, entry_key, ipa_key, policies, users)
         print(f"In group.yml - '{entry_key}' has below values")
-        print(f"IPA Key: {ipa_key}")
-        print(f"Policies: {yaml_data[entry_key]['policies']}")
 
     else:
         # For non-group entries, just create the entry as usual
         print(f"Planning to create '{entry_key}'.")
-        handle_approle(yaml_data, entry_key, policies, consul_file_path, base_policy_dir)
-
-        # Print the details of the newly created non-group entry
-        print(f"In products.yml - '{entry_key}' has below values")
-        print(f"role_id: '{entry_key}'")
-        print(f"Policies: {yaml_data[entry_key]['policies']}")
+        handle_approle(yaml_data, entry_key, policies)
+    
+    # Sort policies after updating the entry
+    sort_policies(yaml_data, entry_key)
+    # Print the details of the newly created non-group entry
+    print(f"{entry_key} has -----> {yaml_data[entry_key]}")
 
 # Check if the specified entry exists and create it if necessary
-def update_entry(yaml_data, entry_key, ipa_key=None, policies=None, consul_file_path=None, base_policy_dir=None, is_group=False):
+def update_entry(yaml_data, entry_key, ipa_key=None, users=None, policies=None, is_group=False):
     entry_to_update = None
 
     # If it's a group, first try to find the entry using ipa_key
@@ -235,6 +268,16 @@ def update_entry(yaml_data, entry_key, ipa_key=None, policies=None, consul_file_
                 entry_to_update = key
                 print(f"Found entry using ipa_key: {ipa_key}")
                 break
+    if is_group and users:
+        print("in users")
+        # Search for the entry by ipa_key
+        for key, value in yaml_data.items():
+            print(value.get('users'),users)
+            if users in value.get('users', []):
+                entry_to_update = key
+                print(f"Found entry using users: {users}")
+                break
+
 
     # If not found by ipa_key, fall back to searching by entry_key
     if not entry_to_update and entry_key in yaml_data:
@@ -254,64 +297,31 @@ def update_entry(yaml_data, entry_key, ipa_key=None, policies=None, consul_file_
     for policy in policies:
         # Check if the policy starts with 'consul_tf_' to validate/update Consul
         if policy.startswith('consul_tf_'):
-            if validate_and_update_consul_policy(policy, consul_file_path):
+            if validate_and_update_consul_policy(policy):
                 print(f"Validated Consul policy: {policy}")
 
         # Check if the policy ends with 'ro' or 'admin' to create/validate HCL files
         if policy.endswith(('ro', 'admin')):
-            create_or_validate_hcl_files(policy, base_policy_dir)
+            create_or_validate_hcl_files(policy)
 
         # Add the policy to the existing policies set (to avoid duplicates)
         existing_policies.add(policy)
 
-    # Update the entry's policies with the new unique policies
+    # Update the entry's policies with the new unique policiessss
     yaml_data[entry_to_update]['policies'] = list(existing_policies)
-
+    
+    # Sort policies after updating the entry
+    sort_policies(yaml_data, entry_to_update)
+    
     if is_group:
-        print(f"Policies updated using app '{entry_key}' (entry key).")
+        print(f"Policies updated using app '{entry_to_update}'.")
     else:
-        print(f"Policies updated using app '{entry_key}' (entry key).")
+        print(f"Policies updated using app '{entry_to_update}'.")
 
-    print(f"Updated entry: {yaml_data[entry_to_update]}")
-
-def robot_access(yaml_data, app_name, user, policies, consul_file_path, base_policy_dir, user_file_path, is_group=False):
-    # Validate and update user in user.yml
-    if validate_and_update_user(user, user_file_path):
-        print(f"User '{user}' is valid or has been added to '{user_file_path}'.")
-
-    # Proceed with robot access logic (same as group access)
-    if app_name not in yaml_data:
-        print(f"App '{app_name}' not found in YAML data. Adding app entry.")
-        yaml_data[app_name] = {}
-
-    if 'users' not in yaml_data[app_name]:
-        print(f"'users' section not found in app '{app_name}'. Adding 'users' section.")
-        yaml_data[app_name]['users'] = []
-
-    # Check if the user already exists in the 'users' section
-    if user not in yaml_data[app_name]['users']:
-        print(f"User '{user}' not found in app '{app_name}' users. Adding user.")
-        yaml_data[app_name]['users'].append(user)
-
-    # Ensure 'policies' section exists
-    if 'policies' not in yaml_data[app_name]:
-        print(f"'policies' section not found in app '{app_name}'. Adding 'policies' section.")
-        yaml_data[app_name]['policies'] = []
-
-    # Add policies if not already present
-    for policy in policies:
-        if policy not in yaml_data[app_name]['policies']:
-            print(f"Adding policy '{policy}' to app '{app_name}'.")
-            yaml_data[app_name]['policies'].append(policy)
-
-    # Write updated YAML data back to consul.yml
-    write_yaml(consul_file_path, yaml_data)
-
-    # Update Consul policies (if necessary) - this is where you may call any other policy-related functions
-    print(f"Robot access for app '{app_name}' has been updated.")
+    print(f"{entry_to_update}: {yaml_data[entry_to_update]}")
 
 # Function to check and update user.yml if a user is missing
-def validate_and_update_user(user, user_file_path):
+def validate_and_update_user(users, user_file_path):
     if not os.path.exists(user_file_path):
         print(f"User file '{user_file_path}' not found.")
         return False
@@ -321,53 +331,50 @@ def validate_and_update_user(user, user_file_path):
     if user_data is None:
         user_data = {}
 
-    # If the user doesn't exist, add it to user.yml
-    if user not in user_data:
-        print(f"User '{user}' not found in User YAML. Adding '{user}: {{}}' to User YAML.")
-        user_data[user] = {}  # Add 'user: {}' entry
-        write_yaml(user_file_path, user_data, yaml)  # Save the changes to user.yml
-        return True
+    # Iterate over each user in the provided list
+    for user in users:
+        # If the user doesn't exist, add it to user.yml
+        if user not in user_data:
+            print(f"User '{user}' not found in User YAML. Adding '{user}: {{}}' to User YAML.")
+            user_data[user] = {}  # Add 'user: {}' entry
+            # Write the updated data back to the user file after each addition
+            write_yaml(user_file_path, user_data, yaml)  # Save the changes to user.yml
 
     return True
 
+
 # Main function to handle command-line arguments
 def main():
+    global groups_file_path, approles_file_path
+
     # Parse the command-line arguments
     args = parse_args()
-
-    # Define file paths (you can adjust these paths as necessary)
-    consul_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\consul\\consul.yml'
-    base_policy_dir = 'C:\\Users\\dheeraj\\Documents\\GIT\\policies'
-    groups_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\groups\\groups.yml'
-    approles_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\aproles\\products.yml'
-    user_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\user\\user.yml'
-
     # Extract variables from the command-line arguments
     policies = args.get('policies', '').split(',')  # List of policies
     ipa_key = args.get('ipa_key')  # IPA key
     app_name = args.get('app')  # Application name
     action = args.get('action')  # Action (create or update)
-    user = args.get('user') 
+    users = args.get('users', '').split(',')  # Robot user
 
     # Determine the file path based on action
     if action in ['create_approle', 'update_approle']:
         file_path = approles_file_path
         is_group = False
+    elif action in ['create_robotuser', 'update_robotuser']:
+        file_path = groups_file_path
+        is_group = True
+        ipa_key = ''
+        # Check if ipa_key is provided when action is create_group or update_group
+        if not users:
+            print("Error: 'users' is required for 'create_robot' and 'update_robot' actions.")
+            return
     elif action in ['create_group', 'update_group']:
         file_path = groups_file_path
         is_group = True
-
+        users = ''
         # Check if ipa_key is provided when action is create_group or update_group
         if not ipa_key:
             print("Error: 'ipa_key' is required for 'create_group' and 'update_group' actions.")
-            return
-    elif action in ['grant_robot']:
-        file_path = groups_file_path
-        is_group = True
-
-        # Check if ipa_key is provided when action is create_group or update_group
-        if not user:
-            print("Error: 'user' is required for 'grant_robot' actions.")
             return
     else:
         print(f"Error: Unsupported action '{action}'.")
@@ -382,11 +389,9 @@ def main():
 
     # Handle the requested action
     if action.startswith('update'):
-        update_entry(yaml_data, app_name, ipa_key, policies, consul_file_path, base_policy_dir, is_group)
-    elif action.startswith('grant'):
-        robot_access(yaml_data, app_name, user, policies, consul_file_path, base_policy_dir, user_file_path)
+        update_entry(yaml_data, app_name, ipa_key, users, policies, is_group)
     else:
-        create_entry(yaml_data, app_name, ipa_key, policies, consul_file_path, base_policy_dir, is_group)
+        create_entry(yaml_data, app_name, ipa_key, users, policies, is_group)
 
     # Write the updated YAML file using the correct file_path
     write_yaml(file_path, yaml_data, yaml)  # Make sure this uses file_path
