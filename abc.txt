@@ -1,401 +1,73 @@
-import ruamel.yaml
-import argparse
-import os
-import sys
-from collections import OrderedDict
-from jinja2 import Environment, FileSystemLoader
+import requests
+import urllib3
+from urllib.parse import quote
+import json
 
+# Suppress only the InsecureRequestWarning
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-consul_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\consul\\consul.yml'
-base_policy_dir = 'C:\\Users\\dheeraj\\Documents\\GIT\\policies'
-groups_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\groups\\groups.yml'
-approles_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\aproles\\products.yml'
-user_file_path = 'C:\\Users\\dheeraj\\Documents\\GIT\\user\\user.yml'
+# Function to make the request using the given parameters
+def curl_url_with_params(url, query, db, epoch):
+    try:
+        # Manually URL-encode the query
+        encoded_query = quote(query)
 
-# Custom YAML dumper to maintain order
-class OrderedDumper(ruamel.yaml.Dumper):
-    def increase_indent(self, flow=False, indentless=False):
-        return super(OrderedDumper, self).increase_indent(flow, False)
-
-# Function to read the YAML file with ruamel.yaml
-def read_yaml(file_path):
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.default_flow_style = False
-    yaml.explicit_start = True
-    with open(file_path, 'r') as file:
-        try:
-            data = yaml.load(file)
-            return data, yaml
-        except ruamel.yaml.YAMLError as error:
-            print(f"Error reading YAML file: {error}")
-            return None, None
-
-# Function to write YAML data back to the file with ruamel.yaml
-def write_yaml(file_path, data, yaml=None):
-    yaml = yaml or ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.default_flow_style = False
-    yaml.explicit_start = True
-    yaml.indent(offset=2)
-    with open(file_path, 'w') as file:
-        try:
-            yaml.dump(data, file)
-        except ruamel.yaml.YAMLError as error:
-            print(f"Error writing YAML file: {error}")
-
-# Function to parse command-line arguments
-def parse_args():
-    parser = argparse.ArgumentParser(description='Update YAML file with given data.')
-    parser.add_argument('args', nargs=argparse.REMAINDER, help='Command-line arguments as key=value pairs')
-
-    # Parse the arguments
-    parsed_args = parser.parse_args()
-
-    # Convert the args list into a dictionary
-    arg_dict = dict(arg.split('=') for arg in parsed_args.args)
-
-    return arg_dict
-
-# Function to sort the policies alphabetically
-def sort_policies(yaml_data, entry_key):
-    if entry_key in yaml_data:
-        entry = yaml_data[entry_key]
-        if 'policies' in entry:
-            entry['policies'] = sorted(entry['policies'])
-    else:
-        print(f"'{entry_key}' not found for sorting.")
-
-# Function to check and update consul.yml if a policy is missing
-def validate_and_update_consul_policy(policy):
-    if not os.path.exists(consul_file_path):
-        print(f"Consul file '{consul_file_path}' not found.")
-        return False
-
-    consul_data, yaml = read_yaml(consul_file_path)
-
-    if consul_data is None:
-        consul_data = {}
-
-    # Extract the policy name after 'consul_tf_'
-    consul_policy = policy.split('_', 2)[-1]
-
-    # If the policy (abc) doesn't exist, add it to consul.yml
-    if consul_policy not in consul_data:
-        print(f"Policy '{consul_policy}' not found in Consul YAML. Adding '{consul_policy}: {{}}' to Consul YAML.")
-        consul_data[consul_policy] = {}  # Add 'abc: {}' entry
-        write_yaml(consul_file_path, consul_data, yaml)  # Save the changes to consul.yml
-        return True
-
-    return True
-
-# Function to render HCL content from a Jinja template
-def render_hcl_template(template_path, context):
-    template_dir = os.path.dirname(template_path)
-    template_file = os.path.basename(template_path)
-    
-    env = Environment(loader=FileSystemLoader(template_dir))
-    template = env.get_template(template_file)
-    
-    # Render the template with the provided context
-    return template.render(context)
-
-# Function to create specific .hcl files based on Jinja templates
-def create_hcl_file(file_path, policy):
-    policy_parts = policy.split('/')
-
-    if len(policy_parts) < 4:
-        print(f"Invalid policy format: {policy}")
-        return
-
-    # Extract type (data or product) and app name
-    app_type = policy_parts[1]  # e.g., 'data' or 'product'
-    app_name = policy_parts[2]  # e.g., 'dfdar'
-    policy_type = policy_parts[-1]  # e.g., 'ro' or 'admin'
-
-    # Determine the data_type based on app_type
-    if app_type == "data":
-        data_type = "appdata"
-    elif app_type == "product":
-        data_type = "appsecret"
-    else:
-        print(f"Unknown app type: {app_type}")
-        return
-
-    # Choose the appropriate Jinja template based on the policy type
-    if policy_type == 'admin':
-        jinja_template_path = 'C:/Users/dheeraj/Documents/GIT/testing/hcl_template.jinja'
-    elif policy_type == 'ro':
-        jinja_template_path = 'C:/Users/dheeraj/Documents/GIT/testing/hcl_template_ro.jinja'
-    else:
-        print(f"Unsupported policy type: {policy_type}")
-        return
-
-    # Prepare the context for the Jinja template
-    context = {
-        "app_type": app_type,
-        "data_type": data_type,
-        "app_name": app_name
-    }
-
-    # Render the HCL content from the Jinja template
-    hcl_content = render_hcl_template(jinja_template_path, context)
-
-    # Write the rendered HCL content to the specified file
-    with open(file_path, 'w') as file:
-        file.write(hcl_content.strip())
-        print(f"Created {file_path} with {policy_type} capabilities for {app_name}.")
-
-# Function to check and create necessary policy files
-def create_or_validate_hcl_files(policy):
-    policy_parts = policy.split('/')
-
-    if len(policy_parts) < 4:
-        print(f"Invalid policy format: {policy}")
-        return
-    app_type = policy_parts[1]  # e.g., 'product' or 'data'
-    app_name = policy_parts[2]  # e.g., 'dart'
-    policy_type = policy_parts[-1]  # e.g., 'ro' or 'admin'
-
-    # Build the folder and file path
-    folder_path = os.path.join(base_policy_dir, app_type, app_name)
-    file_path = os.path.join(folder_path, f"{policy_type}.hcl")
-
-    if not os.path.exists(folder_path):
-        # If the folder (e.g., 'data/dart') doesn't exist, create it
-        print(f"Creating missing folder: {folder_path}")
-        os.makedirs(folder_path)
-
-    if not os.path.exists(file_path):
-        print(f"Creating missing file: {file_path}")
-        # Pass the full policy (e.g., 'app/data/dart/admin') to create_hcl_file
-        create_hcl_file(file_path, policy)
-    else:
-        print(f"{file_path} already exists.")
-
-# Function to handle approle entries
-def handle_approle(yaml_data, entry_key, policies):
-    if entry_key not in yaml_data:
-        print(f"'{entry_key}' not found. Creating '{entry_key}'.")
-        for policy in policies:
-            if policy.startswith('consul_tf_'):
-                validate_and_update_consul_policy(policy)
-            if policy.endswith(('ro', 'admin')):
-                create_or_validate_hcl_files(policy)
-        yaml_data[entry_key] = {
-            'role_id': entry_key,
-            'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
+        # Defining the parameters
+        params = {
+            'q': encoded_query,
+            'db': db,
+            'epoch': epoch
         }
-    else:
-        print(f"'{entry_key}' already exists as {yaml_data[entry_key]} . Use update function to add new policies")
-        sys.exit(1)
 
-# Function to handle group entries
-def handle_group(yaml_data, entry_key, ipa_key, policies=None, users=None):
-    if entry_key not in yaml_data:
-        print(f"Creating '{entry_key}'.")
-        if users:
-            users_list = [users]
-            yaml_data[entry_key] = {
-                'users': users,
-                'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
-            }
-        if ipa_key:
-            print("In else")
-            yaml_data[entry_key] = {
-                'aliases': {
-                    'ipa': ipa_key
-                },
-                'policies': list(OrderedDict.fromkeys(policies))  # Preserve the order of policies
-            }
-        
-        for policy in policies:
-            if policy.startswith('consul_tf_'):
-                validate_and_update_consul_policy(policy)
-            if policy.endswith(('ro', 'admin')):
-                create_or_validate_hcl_files(policy)
-    else:
-        print(f"'{entry_key}' already exists as {yaml_data[entry_key]}. Use update function to add new policies")
-        sys.exit(1)
+        # Sending a GET request with parameters and SSL verification disabled
+        response = requests.get(url, params=params, verify=False)
 
-# Check if the specified entry exists and create it if necessary
-def create_entry(yaml_data, entry_key, ipa_key=None, users=None, policies=None, is_group=False):
-    # If it's a group, check if the ipa_key is already in use
-    if is_group and ipa_key:
-        # Search for the ipa_key in the existing data
-        for key, value in yaml_data.items():
-            if value.get('aliases', {}).get('ipa') == ipa_key:
-                print(f"ipa_key '{ipa_key}' is already assigned to entry '{key}'. Update '{key}' with new policies")
-                return
+        # Check the status and parse JSON if successful
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error: Received status code {response.status_code}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error: {e}")
+        return None
 
-        # If no existing ipa_key is found, proceed to create the group entry
-        print(f"Planning to create group entry for '{entry_key}'.")
-        handle_group(yaml_data, entry_key, ipa_key, policies)
-    
-    elif is_group and users:
-        # Search for the ipa_key in the existing data
-        for key, value in yaml_data.items():
-            if value.get('users') == users:
-                print(f"users '{users}' is already assigned to entry '{key}'. Update '{key}' with new policies")
-                return
-        # Validate and update user in user.yml
-        if validate_and_update_user(users, user_file_path):
-            print(f"Checking if user='{users}' exists in users.yml.")
-        # If no existing user is found, proceed to create the group entry
-        print(f"Planning to create user entry for '{entry_key}'.")
-        handle_group(yaml_data, entry_key, ipa_key, policies, users)
-        print(f"In group.yml - '{entry_key}' has below values")
+# Main function to check the thresholds and alert
+def check_and_alert(conf, printAll):
+    query = conf['disk_query']
+    url = conf['url']
+    db = conf['dbname']
+    epoch = "ms"
 
-    else:
-        # For non-group entries, just create the entry as usual
-        print(f"Planning to create '{entry_key}'.")
-        handle_approle(yaml_data, entry_key, policies)
-    
-    # Sort policies after updating the entry
-    sort_policies(yaml_data, entry_key)
-    # Print the details of the newly created non-group entry
-    print(f"{entry_key} has -----> {yaml_data[entry_key]}")
-
-# Check if the specified entry exists and create it if necessary
-def update_entry(yaml_data, entry_key, ipa_key=None, users=None, policies=None, is_group=False):
-    entry_to_update = None
-
-    # If it's a group, first try to find the entry using ipa_key
-    if is_group and ipa_key:
-        # Search for the entry by ipa_key
-        for key, value in yaml_data.items():
-            if value.get('aliases', {}).get('ipa') == ipa_key:
-                entry_to_update = key
-                print(f"Found entry using ipa_key: {ipa_key}")
-                break
-    if is_group and users:
-        print("in users")
-        # Search for the entry by ipa_key
-        for key, value in yaml_data.items():
-            print(value.get('users'),users)
-            if users in value.get('users', []):
-                entry_to_update = key
-                print(f"Found entry using users: {users}")
-                break
-
-
-    # If not found by ipa_key, fall back to searching by entry_key
-    if not entry_to_update and entry_key in yaml_data:
-        entry_to_update = entry_key
-        print(f"Found entry using entry_key: {entry_key}")
-    
-    # If no entry was found, exit
-    if not entry_to_update:
-        print(f"No existing entry found for ipa_key: {ipa_key} or entry_key: {entry_key}. Exiting without changes.")
+    # Query InfluxDB using curl-like requests logic
+    result = curl_url_with_params(url, query, db, epoch)
+    if not result or "results" not in result:
+        print("No data returned")
         return
 
-    print(f"Updating existing entry '{entry_to_update}'.")
+    # Process the result JSON
+    for series in result["results"][0].get("series", []):
+        for i, row in enumerate(series["values"]):
+            # Extracting host and used_percent based on the columns
+            host = row[series["columns"].index("host")]
+            used_percent = row[series["columns"].index("used_percent")]
 
-    # Get the existing policies and preserve uniqueness
-    existing_policies = set(yaml_data[entry_to_update]['policies'])
+            # Checking thresholds
+            if used_percent > conf['disk_threshold_crit']:
+                print(f"[CRITICAL] {host} disk use ({used_percent}%) exceeds critical threshold ({conf['disk_threshold_crit']}%)")
+            elif used_percent > conf['disk_threshold_warn']:
+                print(f"[WARNING] {host} disk use ({used_percent}%) exceeds warning threshold ({conf['disk_threshold_warn']}%)")
+            else:
+                print(f"{host} disk use is normal.")
 
-    for policy in policies:
-        # Check if the policy starts with 'consul_tf_' to validate/update Consul
-        if policy.startswith('consul_tf_'):
-            if validate_and_update_consul_policy(policy):
-                print(f"Validated Consul policy: {policy}")
-
-        # Check if the policy ends with 'ro' or 'admin' to create/validate HCL files
-        if policy.endswith(('ro', 'admin')):
-            create_or_validate_hcl_files(policy)
-
-        # Add the policy to the existing policies set (to avoid duplicates)
-        existing_policies.add(policy)
-
-    # Update the entry's policies with the new unique policiessss
-    yaml_data[entry_to_update]['policies'] = list(existing_policies)
-    
-    # Sort policies after updating the entry
-    sort_policies(yaml_data, entry_to_update)
-    
-    if is_group:
-        print(f"Policies updated using app '{entry_to_update}'.")
-    else:
-        print(f"Policies updated using app '{entry_to_update}'.")
-
-    print(f"{entry_to_update}: {yaml_data[entry_to_update]}")
-
-# Function to check and update user.yml if a user is missing
-def validate_and_update_user(users, user_file_path):
-    if not os.path.exists(user_file_path):
-        print(f"User file '{user_file_path}' not found.")
-        return False
-
-    user_data, yaml = read_yaml(user_file_path)
-
-    if user_data is None:
-        user_data = {}
-
-    # Iterate over each user in the provided list
-    for user in users:
-        # If the user doesn't exist, add it to user.yml
-        if user not in user_data:
-            print(f"User '{user}' not found in User YAML. Adding '{user}: {{}}' to User YAML.")
-            user_data[user] = {}  # Add 'user: {}' entry
-            # Write the updated data back to the user file after each addition
-            write_yaml(user_file_path, user_data, yaml)  # Save the changes to user.yml
-
-    return True
-
-
-# Main function to handle command-line arguments
-def main():
-    global groups_file_path, approles_file_path
-
-    # Parse the command-line arguments
-    args = parse_args()
-    # Extract variables from the command-line arguments
-    policies = args.get('policies', '').split(',')  # List of policies
-    ipa_key = args.get('ipa_key')  # IPA key
-    app_name = args.get('app')  # Application name
-    action = args.get('action')  # Action (create or update)
-    users = args.get('users', '').split(',')  # Robot user
-
-    # Determine the file path based on action
-    if action in ['create_approle', 'update_approle']:
-        file_path = approles_file_path
-        is_group = False
-    elif action in ['create_robotuser', 'update_robotuser']:
-        file_path = groups_file_path
-        is_group = True
-        ipa_key = ''
-        # Check if ipa_key is provided when action is create_group or update_group
-        if not users:
-            print("Error: 'users' is required for 'create_robot' and 'update_robot' actions.")
-            return
-    elif action in ['create_group', 'update_group']:
-        file_path = groups_file_path
-        is_group = True
-        users = ''
-        # Check if ipa_key is provided when action is create_group or update_group
-        if not ipa_key:
-            print("Error: 'ipa_key' is required for 'create_group' and 'update_group' actions.")
-            return
-    else:
-        print(f"Error: Unsupported action '{action}'.")
-        return
-
-    # Read the YAML file
-    yaml_data, yaml = read_yaml(file_path)  # Use file_path determined earlier
-
-    if not yaml_data:
-        print("Failed to read the YAML file.")
-        return
-
-    # Handle the requested action
-    if action.startswith('update'):
-        update_entry(yaml_data, app_name, ipa_key, users, policies, is_group)
-    else:
-        create_entry(yaml_data, app_name, ipa_key, users, policies, is_group)
-
-    # Write the updated YAML file using the correct file_path
-    write_yaml(file_path, yaml_data, yaml)  # Make sure this uses file_path
-
+# Example configuration
+conf = {
+    'url': 'https://your-influxdb-url.com/query',  # InfluxDB URL
+    'disk_query': 'SELECT mean("used_percent") FROM "disk" WHERE time > now() - 15m GROUP BY "host"',
+    'dbname': 'guardicore',
+    'disk_threshold_crit': 90,  # Critical threshold for disk usage
+    'disk_threshold_warn': 80   # Warning threshold for disk usage
+}
 
 if __name__ == "__main__":
-    main()
+    check_and_alert(conf, printAll=True)
