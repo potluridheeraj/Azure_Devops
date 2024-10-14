@@ -1,73 +1,36 @@
-import requests
-import urllib3
-from urllib.parse import quote
-import json
+def escape_query(query):
+    """
+    Escapes single quotes inside the query where needed.
+    """
+    # Look for 'env=qa' or similar pattern and escape single quotes if necessary
+    if "env=" in query and "'" not in query:
+        # Find the start of the 'env' condition and insert escaped quotes
+        start = query.find("env=") + 4  # Find the position after "env="
+        end = query.find(' ', start)    # Find the next space after the env value
 
-# Suppress only the InsecureRequestWarning
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        # If there's no space, assume it's at the end of the query
+        if end == -1:
+            end = len(query)
 
-# Function to make the request using the given parameters
-def curl_url_with_params(url, query, db, epoch):
-    try:
-        # Manually URL-encode the query
-        encoded_query = quote(query)
+        # Get the env value
+        env_value = query[start:end]
+        
+        # Wrap the env_value in escaped single quotes
+        query = query[:start] + f"\'{env_value}\'" + query[end:]
+    
+    return query
 
-        # Defining the parameters
-        params = {
-            'q': encoded_query,
-            'db': db,
-            'epoch': epoch
-        }
-
-        # Sending a GET request with parameters and SSL verification disabled
-        response = requests.get(url, params=params, verify=False)
-
-        # Check the status and parse JSON if successful
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"Error: Received status code {response.status_code}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"Error: {e}")
-        return None
-
-# Main function to check the thresholds and alert
-def check_and_alert(conf, printAll):
-    query = conf['disk_query']
-    url = conf['url']
-    db = conf['dbname']
-    epoch = "ms"
-
-    # Query InfluxDB using curl-like requests logic
-    result = curl_url_with_params(url, query, db, epoch)
-    if not result or "results" not in result:
-        print("No data returned")
-        return
-
-    # Process the result JSON
-    for series in result["results"][0].get("series", []):
-        for i, row in enumerate(series["values"]):
-            # Extracting host and used_percent based on the columns
-            host = row[series["columns"].index("host")]
-            used_percent = row[series["columns"].index("used_percent")]
-
-            # Checking thresholds
-            if used_percent > conf['disk_threshold_crit']:
-                print(f"[CRITICAL] {host} disk use ({used_percent}%) exceeds critical threshold ({conf['disk_threshold_crit']}%)")
-            elif used_percent > conf['disk_threshold_warn']:
-                print(f"[WARNING] {host} disk use ({used_percent}%) exceeds warning threshold ({conf['disk_threshold_warn']}%)")
-            else:
-                print(f"{host} disk use is normal.")
-
-# Example configuration
+# Example usage of this function in your disk query logic
 conf = {
     'url': 'https://your-influxdb-url.com/query',  # InfluxDB URL
-    'disk_query': 'SELECT mean("used_percent") FROM "disk" WHERE time > now() - 15m GROUP BY "host"',
+    'disk_query': 'SELECT mean("used_percent") FROM "disk" WHERE time > now() - 15m and env=qa GROUP BY "host"',
     'dbname': 'guardicore',
     'disk_threshold_crit': 90,  # Critical threshold for disk usage
     'disk_threshold_warn': 80   # Warning threshold for disk usage
 }
 
-if __name__ == "__main__":
-    check_and_alert(conf, printAll=True)
+# Before passing the query to the function, escape it
+conf['disk_query'] = escape_query(conf['disk_query'])
+
+# Now you can proceed to use `conf['disk_query']` as needed, and it will have the escaped quotes
+print(conf['disk_query'])  # Check the result
