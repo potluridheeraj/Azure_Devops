@@ -1,36 +1,31 @@
-def escape_query(query):
-    """
-    Escapes single quotes inside the query where needed.
-    """
-    # Look for 'env=qa' or similar pattern and escape single quotes if necessary
-    if "env=" in query and "'" not in query:
-        # Find the start of the 'env' condition and insert escaped quotes
-        start = query.find("env=") + 4  # Find the position after "env="
-        end = query.find(' ', start)    # Find the next space after the env value
+activeChoiceParam(
+            name: 'action',
+            type: 'SINGLE_SELECT',
+            description: 'Select action',
+            script: [
+                classpath: [],
+                fallbackScript: '''
+                    return ["create_group", "update_group", "create_approle", "update_approle", "create_robotuser", "update_robotuser"]
+                ''',
+                script: '''
+                    return ["create_group", "update_group", "create_approle", "update_approle", "create_robotuser", "update_robotuser"]
+                '''
+            ]
+        )
 
-        # If there's no space, assume it's at the end of the query
-        if end == -1:
-            end = len(query)
-
-        # Get the env value
-        env_value = query[start:end]
-        
-        # Wrap the env_value in escaped single quotes
-        query = query[:start] + f"\'{env_value}\'" + query[end:]
-    
-    return query
-
-# Example usage of this function in your disk query logic
-conf = {
-    'url': 'https://your-influxdb-url.com/query',  # InfluxDB URL
-    'disk_query': 'SELECT mean("used_percent") FROM "disk" WHERE time > now() - 15m and env=qa GROUP BY "host"',
-    'dbname': 'guardicore',
-    'disk_threshold_crit': 90,  # Critical threshold for disk usage
-    'disk_threshold_warn': 80   # Warning threshold for disk usage
-}
-
-# Before passing the query to the function, escape it
-conf['disk_query'] = escape_query(conf['disk_query'])
-
-# Now you can proceed to use `conf['disk_query']` as needed, and it will have the escaped quotes
-print(conf['disk_query'])  # Check the result
+        // Dynamic field for 'app' string input based on 'action'
+        activeChoiceReactiveParam(
+            name: 'app',
+            description: 'Enter the name of the app',
+            choiceType: 'TEXTBOX',  // TEXTBOX allows string input
+            groovyScript: [
+                script: '''
+                if (action == 'create_group' || action == 'update_group' || action == 'create_approle' || action == 'update_approle') {
+                    return ["Enter the app name here"]
+                } else {
+                    return ["N/A"]
+                }
+                ''',
+                fallbackScript: 'return ["N/A"]'
+            ]
+        )
